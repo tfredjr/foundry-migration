@@ -1,0 +1,135 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Foundry Agent Configuration",
+  "description": "Configuration schema for migrated Foundry agents with governance",
+  "type": "object",
+  "required": ["name", "modelDeployment", "modelVersion"],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Agent display name" },
+        "description": { "type": "string", "description": "Agent purpose and capabilities" },
+        "owner": { "type": "string", "description": "Agent owner/team" },
+        "createdFrom": { "type": "string", "description": "Source resource (e.g., 'openai-studio-agent-1')" },
+        "createdDate": { "type": "string", "format": "date-time" },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "examples": ["production", "internal", "customer-facing"]
+        }
+      }
+    },
+    "modelConfiguration": {
+      "type": "object",
+      "required": ["modelDeployment", "modelVersion"],
+      "properties": {
+        "modelDeployment": {
+          "type": "string",
+          "description": "Foundry model deployment name",
+          "examples": ["gpt-4o-deployment", "latest-gpt4-deployment"]
+        },
+        "modelVersion": {
+          "type": "string",
+          "description": "Model version identifier",
+          "examples": ["gpt-4o-2024-05-13", "gpt-4-turbo-2024-04-09"]
+        },
+        "fallbackModels": {
+          "type": "array",
+          "description": "Fallback models if primary unavailable",
+          "items": {
+            "type": "object",
+            "properties": {
+              "deployment": { "type": "string" },
+              "version": { "type": "string" },
+              "fallbackOrder": { "type": "integer" }
+            }
+          }
+        },
+        "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+        "maxTokens": { "type": "integer", "minimum": 1 },
+        "topP": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "systemPrompt": {
+      "type": "object",
+      "properties": {
+        "template": { "type": "string", "description": "System prompt template" },
+        "governanceInstructions": {
+          "type": "string",
+          "description": "Governance policies as system prompt suffix"
+        }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "description": "Available tools/skills",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "type": { "type": "string", "enum": ["function", "skill", "retrieval", "code-interpreter"] },
+          "enabled": { "type": "boolean" },
+          "governance": {
+            "type": "object",
+            "properties": {
+              "requiresApproval": { "type": "boolean" },
+              "restrictedTenants": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "governance": {
+      "type": "object",
+      "properties": {
+        "guardrails": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["jailbreak-detection", "pii-detection", "hate-speech-filter", "content-filter"]
+          }
+        },
+        "auditLogging": { "type": "boolean", "default": true },
+        "requiredRoles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "examples": ["agent-developer", "agent-operator", "auditor"]
+        },
+        "dataResidency": {
+          "type": "string",
+          "enum": ["us", "eu", "apac", "global"],
+          "description": "Data residency requirement"
+        },
+        "complianceFrameworks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "examples": ["soc2", "hipaa", "gdpr"]
+        }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "properties": {
+        "targetEnvironment": { "type": "string", "enum": ["dev", "staging", "production"] },
+        "replicas": { "type": "integer", "minimum": 1 },
+        "maxConcurrentRequests": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+        "healthCheckInterval": { "type": "integer", "minimum": 5 }
+      }
+    },
+    "monitoring": {
+      "type": "object",
+      "properties": {
+        "enableTracing": { "type": "boolean", "default": true },
+        "enableMetrics": { "type": "boolean", "default": true },
+        "logLevel": { "type": "string", "enum": ["DEBUG", "INFO", "WARN", "ERROR"] },
+        "customMetrics": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

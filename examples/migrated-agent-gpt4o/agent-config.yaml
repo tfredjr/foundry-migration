@@ -1,0 +1,79 @@
+metadata:
+  name: Energy Analysis Assistant
+  description: Migrated from OpenAI Studio - Analyzes energy consumption patterns
+  owner: operations-team
+  createdFrom: openai-studio-energy-analyzer-v2
+  createdDate: "2024-10-05"
+  version: "1.0.0"
+  tags:
+    - production
+    - energy-analysis
+    - cost-optimization
+
+modelConfiguration:
+  modelDeployment: gpt-4o-deployment
+  modelVersion: "gpt-4o-2024-05-13"
+  fallbackModels:
+    - deployment: gpt-4-turbo-deployment
+      version: "gpt-4-turbo-2024-04-09"
+      fallbackOrder: 1
+    - deployment: gpt-35-turbo-deployment
+      version: "gpt-35-turbo-1106"
+      fallbackOrder: 2
+  temperature: 0.7
+  maxTokens: 2048
+  topP: 0.9
+
+systemPrompt:
+  template: |
+    You are an Energy Analysis Assistant.
+    Provide expert analysis on energy consumption, cost optimization,
+    and operational efficiency.
+  governanceInstructions: |
+    - Comply with all content policies
+    - Redact PII in all outputs
+    - Log interactions for audit
+    - Respect data residency requirements
+
+tools:
+  - name: energy-data-access
+    type: function
+    enabled: true
+    governance:
+      requiresApproval: false
+      restrictedTenants: []
+  - name: forecasting-engine
+    type: function
+    enabled: true
+    governance:
+      requiresApproval: false
+
+governance:
+  guardrails:
+    - jailbreak-detection
+    - pii-detection
+    - hate-speech-filter
+    - content-filter
+  auditLogging: true
+  requiredRoles:
+    - agent-developer
+    - agent-operator
+  dataResidency: us
+  complianceFrameworks:
+    - soc2
+
+deployment:
+  targetEnvironment: dev
+  replicas: 1
+  maxConcurrentRequests: 100
+  timeoutSeconds: 30
+  healthCheckInterval: 30
+
+monitoring:
+  enableTracing: true
+  enableMetrics: true
+  logLevel: INFO
+  customMetrics:
+    - invocation-count
+    - latency
+    - errors

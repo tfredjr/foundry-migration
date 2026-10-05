@@ -1,0 +1,383 @@
+{
+  "metadata": {
+    "name": "Default Governance Policy",
+    "description": "Default governance policies for Foundry agents",
+    "version": "1.0.0",
+    "organization": "Your Organization",
+    "enforcementLevel": "mandatory"
+  },
+
+  "guardrails": {
+    "contentFilters": {
+      "enabled": true,
+      "policies": [
+        {
+          "name": "jailbreak-detection",
+          "enabled": true,
+          "severity": "high",
+          "description": "Detects and blocks jailbreak attempts"
+        },
+        {
+          "name": "pii-detection",
+          "enabled": true,
+          "severity": "high",
+          "action": "redact",
+          "patterns": [
+            "ssn",
+            "credit-card",
+            "email",
+            "phone",
+            "iban"
+          ]
+        },
+        {
+          "name": "hate-speech-filter",
+          "enabled": true,
+          "severity": "high"
+        },
+        {
+          "name": "violence-filter",
+          "enabled": true,
+          "severity": "medium"
+        },
+        {
+          "name": "illegal-activity-filter",
+          "enabled": true,
+          "severity": "high"
+        }
+      ]
+    },
+    "tokenLimits": {
+      "maxInputTokens": 4096,
+      "maxOutputTokens": 2048,
+      "maxConcurrentRequests": 100
+    },
+    "rateLimiting": {
+      "enabled": true,
+      "requestsPerMinute": 1000,
+      "requestsPerHour": 50000
+    }
+  },
+
+  "rbac": {
+    "roles": [
+      {
+        "name": "agent-developer",
+        "description": "Develops and deploys agents",
+        "permissions": [
+          "agents:create",
+          "agents:read",
+          "agents:update",
+          "agents:deploy-staging",
+          "agents:test",
+          "models:read",
+          "tools:read"
+        ]
+      },
+      {
+        "name": "agent-operator",
+        "description": "Operates and monitors deployed agents",
+        "permissions": [
+          "agents:read",
+          "agents:invoke",
+          "agents:deploy-production",
+          "monitoring:read",
+          "logs:read"
+        ]
+      },
+      {
+        "name": "agent-auditor",
+        "description": "Audits agent activity and governance compliance",
+        "permissions": [
+          "agents:read",
+          "logs:read",
+          "monitoring:read",
+          "governance:read",
+          "audit:read"
+        ]
+      },
+      {
+        "name": "foundry-admin",
+        "description": "Full administration of Foundry resources",
+        "permissions": [
+          "agents:*",
+          "models:*",
+          "tools:*",
+          "governance:*",
+          "rbac:*",
+          "audit:*"
+        ]
+      }
+    ],
+    "requireMultipleReviewers": {
+      "enabled": true,
+      "productionDeployments": 2,
+      "governanceChanges": 2
+    }
+  },
+
+  "auditLogging": {
+    "enabled": true,
+    "destination": "application-insights",
+    "logLevel": "INFO",
+    "events": [
+      "agent-created",
+      "agent-updated",
+      "agent-deployed",
+      "agent-invoked",
+      "governance-policy-changed",
+      "rbac-assignment-changed",
+      "guardrail-triggered",
+      "model-deployment-changed",
+      "access-denied",
+      "quota-exceeded",
+      "error-occurred"
+    ],
+    "retention": {
+      "days": 365,
+      "archiveToStorage": true,
+      "storageContainer": "audit-logs"
+    },
+    "alerts": [
+      {
+        "event": "guardrail-triggered",
+        "severity": "high",
+        "notifyAdmins": true
+      },
+      {
+        "event": "access-denied",
+        "severity": "medium",
+        "notifyAdmins": true
+      },
+      {
+        "event": "quota-exceeded",
+        "severity": "medium",
+        "notifyOps": true
+      }
+    ]
+  },
+
+  "complianceFrameworks": {
+    "soc2": {
+      "enabled": true,
+      "requirements": [
+        "audit-logging-enabled",
+        "rbac-enforced",
+        "encryption-at-rest",
+        "encryption-in-transit",
+        "access-control"
+      ]
+    },
+    "hipaa": {
+      "enabled": false,
+      "description": "Disabled by default. Enable if handling PHI.",
+      "requirements": [
+        "pii-redaction",
+        "audit-logging",
+        "access-control",
+        "encryption",
+        "business-associate-agreement"
+      ]
+    },
+    "gdpr": {
+      "enabled": true,
+      "dataResidency": "eu",
+      "requirements": [
+        "data-residency",
+        "user-consent",
+        "right-to-be-forgotten",
+        "audit-logging"
+      ]
+    }
+  },
+
+  "dataGovernance": {
+    "dataResidency": {
+      "default": "us",
+      "allowedRegions": ["eastus", "westus2", "northeurope"],
+      "euDataOnly": false
+    },
+    "dataClassification": {
+      "levels": [
+        {
+          "level": "public",
+          "description": "Non-sensitive data",
+          "encryption": "recommended"
+        },
+        {
+          "level": "internal",
+          "description": "Company internal data",
+          "encryption": "required",
+          "rbacRequired": true
+        },
+        {
+          "level": "confidential",
+          "description": "Sensitive business data",
+          "encryption": "required",
+          "rbacRequired": true,
+          "auditRequired": true,
+          "approvalRequired": true
+        },
+        {
+          "level": "restricted",
+          "description": "Highly sensitive data",
+          "encryption": "required",
+          "rbacRequired": true,
+          "auditRequired": true,
+          "approvalRequired": true,
+          "segregation": "required"
+        }
+      ]
+    },
+    "retentionPolicy": {
+      "default": 30,
+      "minimum": 7,
+      "maximum": 2555,
+      "archiveAfterDays": 90
+    }
+  },
+
+  "modelGovernance": {
+    "approvedModels": [
+      {
+        "name": "gpt-4o",
+        "provider": "azure-openai",
+        "minVersion": "2024-05-13",
+        "approved": true,
+        "description": "Latest GPT-4 Omni model, recommended for most use cases"
+      },
+      {
+        "name": "gpt-4-turbo",
+        "provider": "azure-openai",
+        "minVersion": "2024-04-09",
+        "approved": true,
+        "description": "Faster GPT-4 Turbo model"
+      },
+      {
+        "name": "gpt-35-turbo",
+        "provider": "azure-openai",
+        "minVersion": "1106",
+        "approved": true,
+        "description": "Cost-effective GPT-3.5 Turbo model"
+      }
+    ],
+    "customModels": {
+      "allowCustomFinetuning": true,
+      "requireApproval": true,
+      "approvalProcess": "governance-board-review"
+    },
+    "modelMonitoring": {
+      "enabled": true,
+      "trackCosts": true,
+      "trackLatency": true,
+      "trackAccuracy": true,
+      "alertOnAnomaly": true
+    }
+  },
+
+  "toolsAndSkills": {
+    "approvedToolboxes": [
+      {
+        "name": "data-access",
+        "description": "Tools for accessing data sources",
+        "approved": true
+      },
+      {
+        "name": "computation",
+        "description": "Computational and analytical tools",
+        "approved": true
+      },
+      {
+        "name": "external-apis",
+        "description": "Integration with external APIs",
+        "approved": true,
+        "requiresApproval": true
+      }
+    ],
+    "toolRestrictions": {
+      "requireApprovalFor": ["external-apis", "data-deletion", "cost-modification"],
+      "prohibitedTools": []
+    }
+  },
+
+  "agentQuotas": {
+    "maxAgentsPerUser": 50,
+    "maxAgentsPerProject": 1000,
+    "maxConcurrentInvocations": 10000,
+    "maxTokensPerRequest": 4096,
+    "maxTokensPerHour": 10000000,
+    "monthlyBudgetAlert": 100000
+  },
+
+  "deploymentPolicies": {
+    "requireApprovalFor": ["production", "breaking-changes"],
+    "canaryDeployment": {
+      "enabled": true,
+      "initialPercentage": 5,
+      "increments": [5, 10, 25, 50, 100],
+      "minDurationBetweenIncrements": "1h"
+    },
+    "blueGreenDeployment": {
+      "enabled": true,
+      "requireHealthCheck": true
+    },
+    "rollbackPolicy": {
+      "autoRollbackOnError": true,
+      "errorThreshold": 5
+    }
+  },
+
+  "monitoring": {
+    "enableByDefault": true,
+    "metricsToTrack": [
+      "invocation-count",
+      "response-latency",
+      "error-rate",
+      "token-usage",
+      "cost",
+      "guardrail-triggers",
+      "user-satisfaction"
+    ],
+    "dashboards": {
+      "operationalDashboard": true,
+      "governanceDashboard": true,
+      "costDashboard": true,
+      "performanceDashboard": true
+    },
+    "alerting": {
+      "enabled": true,
+      "channels": ["email", "teams", "pagerduty"],
+      "thresholds": {
+        "highErrorRate": 5,
+        "highLatency": 2000,
+        "highCost": 10000
+      }
+    }
+  },
+
+  "networkSecurity": {
+    "enablePrivateEndpoints": true,
+    "allowPublicAccess": false,
+    "vnetIntegration": true,
+    "requireVpnForAccess": false,
+    "ipWhitelistEnabled": false,
+    "tlsVersion": "1.3"
+  },
+
+  "backupAndRecovery": {
+    "enableBackups": true,
+    "backupFrequency": "daily",
+    "retentionPeriod": 30,
+    "disasterRecoveryRegion": "westus2",
+    "rpoMinutes": 60
+  },
+
+  "policyEnforcement": {
+    "strictMode": false,
+    "violationActions": {
+      "warning": ["log", "notify"],
+      "error": ["log", "notify", "block"],
+      "critical": ["log", "notify", "block", "disable"]
+    }
+  }
+}

@@ -1,0 +1,46 @@
+$schema: https://raw.githubusercontent.com/Azure-Samples/todo-app-python-mongo/main/infra/azure.yaml.schema.json
+
+metadata:
+  template: azure@latest
+  description: Foundry hosted agent scaffold with governance
+
+services:
+  agent:
+    project: ./
+    host: azure.ai.agent
+    package:
+      type: docker
+    language: python
+    codeConfiguration:
+      runtime: python_3_13
+      entryPoint: main.py
+      dependencyResolution: remote_build
+
+variables:
+  AZURE_ENV_NAME: ${AZURE_ENV_NAME}
+  AZURE_LOCATION: ${AZURE_LOCATION:eastus}
+  AZURE_SUBSCRIPTION_ID: ${AZURE_SUBSCRIPTION_ID}
+  
+infra:
+  template: infra/main.bicep
+  parameters:
+    principalId: ${AZURE_PRINCIPAL_ID}
+    principalType: ${AZURE_PRINCIPAL_TYPE:User}
+    environmentName: ${AZURE_ENV_NAME}
+    location: ${AZURE_LOCATION}
+    resourceGroupName: rg-${AZURE_ENV_NAME}
+
+hooks:
+  preProvision:
+    shell: pwsh
+    run: Write-Host "Pre-provisioning validation..."
+  postProvision:
+    shell: pwsh
+    run: Write-Host "Post-provisioning setup..."
+
+env:
+  AZURE_AI_PROJECT_ENDPOINT: ${AZURE_AI_PROJECT_ENDPOINT}
+  AZURE_AI_PROJECT_NAME: ${AZURE_AI_PROJECT_NAME}
+  AZURE_AI_ACCOUNT_NAME: ${AZURE_AI_ACCOUNT_NAME}
+  AZURE_RESOURCE_GROUP: ${AZURE_RESOURCE_GROUP}
+  APPLICATIONINSIGHTS_CONNECTION_STRING: ${APPLICATIONINSIGHTS_CONNECTION_STRING}
