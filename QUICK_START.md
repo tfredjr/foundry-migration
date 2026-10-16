@@ -191,7 +191,7 @@ refactored-agents/
   -Verbose
 
 # Review validation report
-notepad ./reports/validation-report-*.md
+notepad .\reports\validation-report.md
 ```
 
 **Expected Output:** `validation-report.md` and `validation-report.json`.

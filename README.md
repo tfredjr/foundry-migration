@@ -60,6 +60,7 @@ artifacts but never create projects, deploy agents, or apply governance.
 Refactoring refuses to overwrite an existing agent directory; use a fresh output
 directory for a new transformation. Deployment writes `deployment.json` receipts
 and reuses the recorded version on retry if the configuration and endpoint match.
+All configurations and existing receipts are checked before any agent is deployed.
 Online validation checks those versions and performs a billable smoke invocation.
 Offline validation does not verify Azure deployment, governance, or compliance.
 
@@ -158,10 +159,10 @@ Review `./migration-plan/MIGRATION_STRATEGY.md` for step-by-step guidance.
 
 # Option B: Use an existing Foundry project
 # Set environment variables:
-export AZURE_AI_PROJECT_ENDPOINT="<your-foundry-project-endpoint>"
-export AZURE_AI_PROJECT_NAME="<project-name>"
-export AZURE_RESOURCE_GROUP="<resource-group>"
-export AZURE_AI_ACCOUNT_NAME="<foundry-account-name>"
+$env:AZURE_AI_PROJECT_ENDPOINT = "https://ACCOUNT.services.ai.azure.com/api/projects/PROJECT"
+$env:AZURE_AI_PROJECT_NAME = "<project-name>"
+$env:AZURE_RESOURCE_GROUP = "<resource-group>"
+$env:AZURE_AI_ACCOUNT_NAME = "<foundry-account-name>"
 ```
 
 ### 5. Refactor and Deploy Agents
@@ -178,7 +179,7 @@ export AZURE_AI_ACCOUNT_NAME="<foundry-account-name>"
 
 ```bash
 # Configure RBAC, guardrails, and skills
-./scripts/apply-governance.ps1 -FoundryProjectEndpoint $env:AZURE_AI_PROJECT_ENDPOINT -GovernanceConfigFile "./governance/default-governance.json"
+.\scripts\apply-governance.ps1 -FoundryProjectEndpoint $env:AZURE_AI_PROJECT_ENDPOINT -GovernanceConfigFile ".\governance\your-reviewed-governance.json"
 ```
 
 ### 7. Validate and Test
@@ -322,29 +323,25 @@ az role assignment list --assignee "$(az ad signed-in-user show --query id -o ts
   -Verbose
 
 # Outputs generated:
-# - audit/resource-audit-report.md     # Human-readable summary
-# - audit/resources.json               # Machine-readable catalog
-# - audit/models-deployed.json         # Model version inventory
-# - audit/migration-plan.json          # Initial recommendations
+# - audit/resource-audit-report_<timestamp>.md  # Human-readable summary
+# - audit/resources_<timestamp>.json            # Machine-readable catalog
+# - audit/models-deployed_<timestamp>.json      # Model version inventory
 ```
 
 ### Step 3: Analyze and Plan
 
 ```powershell
 # Generate detailed migration strategy
+$audit = Get-ChildItem .\audit\resources_*.json | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 ./scripts/generate-migration-plan.ps1 `
-  -AuditFile "./audit/resources.json" `
+  -AuditFile $audit.FullName `
   -OutputDir "./migration-plan" `
   -Verbose
 
 # Review the strategy
 notepad ./migration-plan/MIGRATION_STRATEGY.md
 
-# Key sections to review:
-# - Resource Mapping: How old resources map to Foundry
-# - Model Strategy: Which models to deploy where
-# - Phasing: Recommended rollout sequence
-# - Risks & Mitigations: Identified issues and solutions
+# Also review resource-migration-map.json and phased-rollout.json.
 ```
 
 ### Step 4: Create Foundry Project (if needed)
@@ -359,7 +356,7 @@ notepad ./migration-plan/MIGRATION_STRATEGY.md
 
 # Option B: Use existing Foundry project
 # Set environment variables for your project:
-$env:AZURE_AI_PROJECT_ENDPOINT = "https://<region>.api.cognitive.microsoft.com/"
+$env:AZURE_AI_PROJECT_ENDPOINT = "https://ACCOUNT.services.ai.azure.com/api/projects/PROJECT"
 $env:AZURE_AI_PROJECT_NAME = "your-project-name"
 $env:AZURE_RESOURCE_GROUP = "rg-your-project"
 $env:AZURE_AI_ACCOUNT_NAME = "your-account"
@@ -369,19 +366,17 @@ $env:AZURE_AI_ACCOUNT_NAME = "your-account"
 
 ```powershell
 # Transform OpenAI Studio agents to Foundry agents
+# Set ValidateOnly to $true to validate without writing output.
 ./scripts/refactor-agents.ps1 `
   -MigrationPlanDir "./migration-plan" `
+  -AgentConfigDir ".\exported-agents" `
   -OutputDir "./refactored-agents" `
-  -ValidateOnly $false `  # Set $true to validate without transforming
+  -ValidateOnly $false `
   -Verbose
 
 # Script generates:
 # - refactored-agents/agent-1/
-#   - agent.yaml                # Agent configuration
-#   - azure.yaml                # Deployment config
-#   - src/main.py              # Agent code
-#   - requirements.txt          # Dependencies
-#   - README.md                # Agent documentation
+#   - agent-config.json         # Reviewable prompt-agent configuration
 # - refactored-agents/agent-2/
 #   - ...
 ```
@@ -390,16 +385,15 @@ $env:AZURE_AI_ACCOUNT_NAME = "your-account"
 
 ```powershell
 # Deploy refactored agents
+# SmokeTest performs a billable invocation of each agent.
 ./scripts/deploy-agents.ps1 `
   -AgentSourceDir "./refactored-agents" `
   -FoundryProjectEndpoint $env:AZURE_AI_PROJECT_ENDPOINT `
-  -SmokeTest $true `         # Run validation tests
+  -SmokeTest $true `
   -Verbose
 
 # Outputs:
-# - Deployed agent URLs
-# - Service endpoints
-# - Deployment logs
+# - deployment.json receipt in each agent directory
 ```
 
 ### Step 7: Apply Governance
@@ -408,20 +402,17 @@ $env:AZURE_AI_ACCOUNT_NAME = "your-account"
 # Set up guardrails, RBAC, and audit logging
 ./scripts/apply-governance.ps1 `
   -FoundryProjectEndpoint $env:AZURE_AI_PROJECT_ENDPOINT `
-  -GovernanceConfigFile "./governance/default-governance.json" `
+  -GovernanceConfigFile ".\governance\your-reviewed-governance.json" `
   -Verbose
 
-# Configures:
-# - Content filters (jailbreak detection, PII detection)
-# - RBAC: Agent Developer, Agent Operator, Auditor roles
-# - Audit logging to Application Insights
-# - Compliance checkpoints
+# Applies only resources declared by your reviewed ARM/Bicep template.
+# The default governance JSON is a requirements baseline and is rejected.
 ```
 
 ### Step 8: Validate & Report
 
 ```powershell
-# Run comprehensive validation
+# Verify local configurations, recorded versions, and smoke invocations
 ./scripts/validate-migration.ps1 `
   -FoundryProjectEndpoint $env:AZURE_AI_PROJECT_ENDPOINT `
   -AgentSourceDir "./refactored-agents" `
@@ -430,12 +421,7 @@ $env:AZURE_AI_ACCOUNT_NAME = "your-account"
 # Review validation report
 notepad ./reports/validation-report.md
 
-# Checks include:
-# - All agents deployed successfully
-# - Governance policies applied
-# - Model deployments verified
-# - Audit logging enabled
-# - Performance baselines established
+# Does not certify governance, logging, compliance, or performance.
 ```
 
 ## Migration Checklist

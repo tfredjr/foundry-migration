@@ -137,7 +137,7 @@ try {
     Assert-Fails {
         & (Join-Path $scripts "refactor-agents.ps1") -MigrationPlanDir (Join-Path $workspace "migration-plan") `
             -AgentConfigDir (Join-Path $testRoot "invalid") -OutputDir (Join-Path $testRoot "invalid-output") -ValidateOnly $true
-    } "at most 2"
+    } "Invalid agent configuration"
     Assert (-not (Test-Path -LiteralPath (Join-Path $testRoot "invalid-output"))) "Invalid transformation does not leave partial output"
     Assert-Fails { & (Join-Path $scripts "migrate.ps1") -Phases Invalid } "ValidateSet"
     Assert-Fails {
@@ -173,6 +173,21 @@ try {
     $posts = @($global:MigrationTestCalls | Where-Object { ($_ -join " ") -like "*--method POST*agents?*" }).Count
     & (Join-Path $scripts "deploy-agents.ps1") -AgentSourceDir $agentDir -FoundryProjectEndpoint $global:MigrationTestEndpoint
     Assert (@($global:MigrationTestCalls | Where-Object { ($_ -join " ") -like "*--method POST*agents?*" }).Count -eq $posts) "Rerunning deployment reuses receipts"
+    $batchDir = Join-Path $testRoot "batch"
+    $newConfig = Read-MigrationJson $agentFile
+    $newConfig.metadata.name = "new-agent"
+    Write-MigrationJson $newConfig (Join-Path $batchDir "a-new\agent-config.json")
+    Write-MigrationJson (Read-MigrationJson $agentFile) (Join-Path $batchDir "z-stale\agent-config.json")
+    $staleReceipt = Read-MigrationJson (Join-Path $agentDir "sample-agent\deployment.json")
+    $staleReceipt.endpoint = "https://other.services.ai.azure.com/api/projects/other"
+    Write-MigrationJson $staleReceipt (Join-Path $batchDir "z-stale\deployment.json")
+    $before = $global:MigrationTestCalls.Count
+    Assert-Fails {
+        & (Join-Path $scripts "deploy-agents.ps1") -AgentSourceDir $batchDir `
+            -FoundryProjectEndpoint $global:MigrationTestEndpoint -SmokeTest $false
+    } "receipt does not match"
+    Assert ($global:MigrationTestCalls.Count -eq $before) "All deployment receipts are validated before any Azure calls"
+    Assert (-not (Test-Path -LiteralPath (Join-Path $batchDir "a-new\deployment.json"))) "Invalid batch does not deploy earlier agents"
     $global:MigrationTestSmokeFail = $true
     Assert-Fails {
         & (Join-Path $scripts "validate-migration.ps1") -AgentSourceDir $agentDir -FoundryProjectEndpoint $global:MigrationTestEndpoint -OutputDir (Join-Path $testRoot "failed")

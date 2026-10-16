@@ -201,7 +201,7 @@ Target Foundry Account
 # Apply governance
 ./scripts/apply-governance.ps1 `
   -FoundryProjectEndpoint "<endpoint>" `
-  -GovernanceConfigFile "./governance/default-governance.json"
+  -GovernanceConfigFile ".\governance\your-reviewed-governance.json"
 ```
 
 ### Phase 4: Agent Refactoring (Week 2-4)
