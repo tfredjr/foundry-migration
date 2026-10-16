@@ -2,6 +2,98 @@
 
 A comprehensive, hands-off migration toolkit to refactor and restructure AI resources from OpenAI Studio to Azure Foundry with modern governance capabilities.
 
+## Implemented Script Workflow
+
+The PowerShell entry points referenced by `scripts\migrate.ps1` are included.
+Use **PowerShell 7.4+** and **Python 3.9+** for refactoring; Azure phases require
+an authenticated Azure CLI and Resource Graph support (`az graph query`).
+The prerequisite checker reports missing tools; it does not install software.
+`azd`, `jq`, and Python packages are not required for the JSON prompt-agent workflow.
+The broader hosted-agent, automatic code migration, and compliance capabilities
+described later in this document are architecture goals, not implemented guarantees.
+
+**Agent input:** Azure resource discovery cannot recover application code, prompts,
+or tools. Export each agent as a JSON object in a directory passed through
+`-AgentConfigDir` (or supply the same objects in the audit's `agents` array):
+
+```json
+{
+  "name": "analysis-assistant",
+  "model": "existing-target-deployment",
+  "instructions": "Answer questions using the supplied data.",
+  "temperature": 0.2,
+  "tools": []
+}
+```
+
+`system_prompt` is accepted instead of `instructions`; `model_deployment` can
+override `model`. Deployment names are preserved, never guessed or upgraded.
+Optional `model_version`, `description`, `temperature`, `top_p`, and `max_tokens`
+are retained in the generated configuration. Temperature and top-p are sent to
+Foundry when explicitly supplied; output token limits are per-invocation settings
+that callers must apply, not platform policies installed by this toolkit.
+Tool definitions are preserved for review, but deployment/validation reject
+agents with tools until their runtime has been ported. No Python application
+code, containers, model deployments, or traffic cutover are generated.
+Generated governance and monitoring settings are proposed requirements, not
+evidence that logging or safety policies are enabled in Azure.
+
+```powershell
+# Read-only Azure discovery plus local planning, transformation, and validation.
+.\scripts\migrate.ps1 -Phases All -DryRun `
+  -AgentConfigDir .\exported-agents -OutputDir .\migration-workspace
+
+# After reviewing artifacts, deploy against a project with the models already deployed.
+.\scripts\migrate.ps1 -Phases Deployment,Validation `
+  -FoundryProjectEndpoint "https://ACCOUNT.services.ai.azure.com/api/projects/PROJECT" `
+  -OutputDir .\migration-workspace
+
+# Offline regression checks; Azure CLI calls are mocked.
+pwsh -NoProfile -File .\scripts\tests\migration.Tests.ps1
+python -B .\scripts\tests\test_agent_transformer.py
+```
+
+Scripts resolve their dependencies relative to their own location, not your
+working directory. `-Phases All` expands to the six phases. Selected later phases
+require earlier artifacts in the same `-OutputDir`. Dry runs still write local
+artifacts but never create projects, deploy agents, or apply governance.
+Refactoring refuses to overwrite an existing agent directory; use a fresh output
+directory for a new transformation. Deployment writes `deployment.json` receipts
+and reuses the recorded version on retry if the configuration and endpoint match.
+Online validation checks those versions and performs a billable smoke invocation.
+Offline validation does not verify Azure deployment, governance, or compliance.
+
+**Project creation:** An existing endpoint can be supplied by parameter or
+`AZURE_AI_PROJECT_ENDPOINT`. Without one, Deployment requires `-ResourceGroup`
+and `-AccountName` (or `AZURE_RESOURCE_GROUP` and `AZURE_AI_ACCOUNT_NAME`).
+`-ProjectName` and `-Location` control creation. The returned endpoint is passed
+to subsequent phases automatically. Hosted-agent infrastructure and caller
+data-plane role assignments must be provisioned separately.
+
+**Governance:** `governance\default-governance.json` is a requirements baseline,
+not a valid Azure policy payload. Governance deliberately fails rather than
+claiming it applied that baseline. Supply `-GovernanceConfigFile` with an
+`azureDeployment` section pointing to your reviewed resource-group ARM/Bicep
+template and ARM JSON parameters file, relative to the config file:
+
+```json
+{
+  "azureDeployment": {
+    "resourceGroup": "your-resource-group",
+    "templateFile": "policies.bicep",
+    "parametersFile": "policies.parameters.json"
+  }
+}
+```
+
+The parameters file must include
+`"foundryProjectEndpoint": {"value": "https://ACCOUNT.services.ai.azure.com/api/projects/PROJECT"}`
+inside its `parameters` object, matching the selected endpoint. Your template
+must implement the intended policies, role assignments, logging and resource
+bindings; a successful deployment proves only that the declared resources
+were deployed, not compliance with the entire baseline. The phase writes
+`reports\governance-status.json`. Source OpenAI resources are never deleted.
+
 ## Overview
 
 This framework automates the discovery, assessment, and migration of OpenAI Studio resources to Azure Foundry. It handles:
@@ -18,22 +110,20 @@ This framework automates the discovery, assessment, and migration of OpenAI Stud
 ### Prerequisites
 
 - **Azure CLI** (`az`) — [Install](https://aka.ms/installazurecli)
-- **Azure Developer CLI** (`azd`) — [Install](https://aka.ms/azure-dev/install)
-- **Python 3.9+** — For migration scripts
-- **jq** (Linux/macOS) or PowerShell (Windows) — For JSON processing
-- **Azure Permissions** — Owner or Contributor role on the subscription
+- **Python 3.9+** — For refactoring JSON agent configurations
+- **PowerShell 7.4+** — For orchestration and JSON Schema validation
+- **Azure Permissions** — Reader for discovery; Contributor for provisioning;
+  Azure AI User or equivalent data-plane access for agents. Governance templates
+  that assign roles also require role-assignment permissions.
 
 ### 1. Run the Dependency Check (Required)
 
 ```bash
-# macOS / Linux
-./scripts/check-and-setup-dependencies.sh
-
 # Windows (PowerShell)
-./scripts/check-and-setup-dependencies.ps1
+.\scripts\check-and-setup-dependencies.ps1
 ```
 
-This validates all prerequisites and installs missing dependencies.
+This checks Azure authentication and Python and reports missing dependencies without installing them.
 
 ### 2. Run the Discovery Phase
 
@@ -42,20 +132,20 @@ This validates all prerequisites and installs missing dependencies.
 ./scripts/discover-resources.ps1 -SubscriptionId "<subscription-id>" -OutputDir "./audit"
 
 # Review the generated audit report
-./audit/resource-audit-report.md
+Get-ChildItem .\audit\resource-audit-report_*.md
 ```
 
 This creates:
-- `resource-audit-report.md` — Human-readable inventory
-- `resources.json` — Machine-readable resource catalog
-- `models-deployed.json` — Model version mapping
-- `migration-plan.json` — Recommended refactoring steps
+- `resource-audit-report_<timestamp>.md` — Human-readable inventory
+- `resources_<timestamp>.json` — Machine-readable resource catalog
+- `models-deployed_<timestamp>.json` — Model deployment inventory
 
 ### 3. Review the Migration Plan
 
 ```bash
-# Generate a detailed migration plan
-./scripts/generate-migration-plan.ps1 -AuditFile "./audit/resources.json" -OutputDir "./migration-plan"
+# Generate a detailed migration plan from the latest audit
+$audit = Get-ChildItem .\audit\resources_*.json | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+.\scripts\generate-migration-plan.ps1 -AuditFile $audit.FullName -OutputDir .\migration-plan
 ```
 
 Review `./migration-plan/MIGRATION_STRATEGY.md` for step-by-step guidance.
@@ -64,7 +154,7 @@ Review `./migration-plan/MIGRATION_STRATEGY.md` for step-by-step guidance.
 
 ```bash
 # Option A: Create a new Foundry project
-./scripts/create-foundry-project.ps1 -ProjectName "energy-transfer-ai" -Location "eastus" -EnableHostedAgents $true
+.\scripts\create-foundry-project.ps1 -ProjectName "energy-transfer-ai" -Location "eastus" -ResourceGroup "YOUR_RESOURCE_GROUP" -AccountName "YOUR_ACCOUNT_NAME"
 
 # Option B: Use an existing Foundry project
 # Set environment variables:
@@ -78,7 +168,7 @@ export AZURE_AI_ACCOUNT_NAME="<foundry-account-name>"
 
 ```bash
 # Transform OpenAI Studio resources into Foundry agents
-./scripts/refactor-agents.ps1 -MigrationPlanDir "./migration-plan" -FoundryProjectEndpoint $env:AZURE_AI_PROJECT_ENDPOINT
+.\scripts\refactor-agents.ps1 -MigrationPlanDir ".\migration-plan" -AgentConfigDir ".\exported-agents" -OutputDir ".\refactored-agents"
 
 # Deploy refactored agents
 ./scripts/deploy-agents.ps1 -AgentSourceDir "./refactored-agents" -FoundryProjectEndpoint $env:AZURE_AI_PROJECT_ENDPOINT
@@ -107,7 +197,8 @@ export AZURE_AI_ACCOUNT_NAME="<foundry-account-name>"
 foundry-migration/
 ├── README.md (this file)
 ├── scripts/
-│   ├── check-and-setup-dependencies.ps1     # Verify & install deps
+│   ├── migrate.ps1                          # Phase orchestration
+│   ├── check-and-setup-dependencies.ps1     # Verify selected prerequisites
 │   ├── discover-resources.ps1               # Audit OpenAI + Foundry
 │   ├── generate-migration-plan.ps1          # Create migration plan
 │   ├── create-foundry-project.ps1           # Setup Foundry project
@@ -115,45 +206,35 @@ foundry-migration/
 │   ├── deploy-agents.ps1                    # Deploy to Foundry
 │   ├── apply-governance.ps1                 # Setup guardrails/RBAC
 │   ├── validate-migration.ps1               # Verify migration
-│   └── helpers/
-│       ├── openai-resource-scanner.py       # OpenAI audit
-│       ├── foundry-resource-scanner.py      # Foundry audit
-│       ├── agent-transformer.py             # Agent refactoring
-│       ├── model-mapper.py                  # Model version tracking
-│       └── common.py                        # Shared utilities
+│   ├── helpers/
+│   │   ├── agent-transformer.py             # Agent configuration transformation
+│   │   └── migration-common.ps1             # Shared JSON, CLI and validation helpers
+│   └── tests/
+│       ├── migration.Tests.ps1              # Mocked workflow regression checks
+│       └── test_agent_transformer.py        # Transformer serialization checks
 ├── templates/
-│   ├── agent-template.yaml                  # Foundry agent scaffold
 │   ├── azure.yaml                           # azd project template
-│   ├── agent-spec.json                      # Agent configuration schema
-│   ├── guardrail-config.json                # Guardrails template
-│   ├── toolbox-config.json                  # Toolbox definition
-│   └── evaluation-suite.yaml                # Eval setup template
+│   └── agent-spec.json                      # Agent configuration schema
 ├── governance/
-│   ├── default-governance.json              # Default guardrails + RBAC
-│   ├── rbac-roles.json                      # Role definitions
-│   ├── guardrail-policies.json              # Policy guardrails
-│   └── audit-logging.json                   # Audit + monitoring setup
+│   └── default-governance.json              # Requirements baseline (not executable)
 ├── examples/
-│   ├── migrated-agent-gpt4o/                # Example: gpt-4o agent
-│   ├── migrated-agent-latest/               # Example: latest model
-│   └── multi-model-agent/                   # Example: model selection
+│   └── migrated-agent-gpt4o/                # Illustrative Python agent
 ├── audit/ (generated)
-│   ├── resource-audit-report.md
-│   ├── resources.json
-│   ├── models-deployed.json
-│   └── migration-plan.json
+│   ├── resource-audit-report_<timestamp>.md
+│   ├── resources_<timestamp>.json
+│   └── models-deployed_<timestamp>.json
 ├── migration-plan/ (generated)
 │   ├── MIGRATION_STRATEGY.md
 │   ├── resource-migration-map.json
 │   └── phased-rollout.json
 ├── refactored-agents/ (generated)
-│   ├── agent-1/
-│   ├── agent-2/
-│   └── ...
+│   └── <agent-name>/
+│       ├── agent-config.json
+│       └── deployment.json                  # After deployment
 └── reports/ (generated)
     ├── validation-report.md
-    ├── deployment-status.json
-    └── governance-compliance.md
+    ├── validation-report.json
+    └── governance-status.json               # After reviewed governance deployment
 ```
 
 ## Phase-Based Migration Strategy
@@ -273,7 +354,7 @@ notepad ./migration-plan/MIGRATION_STRATEGY.md
 ./scripts/create-foundry-project.ps1 `
   -ProjectName "energy-transfer-production" `
   -Location "eastus" `
-  -EnableHostedAgents $true `
+  -ResourceGroup "YOUR_RESOURCE_GROUP" -AccountName "YOUR_ACCOUNT_NAME" `
   -Verbose
 
 # Option B: Use existing Foundry project

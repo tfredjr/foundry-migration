@@ -22,7 +22,7 @@ Azure subscription ID (defaults to current subscription).
 Foundry project endpoint URL. If not provided, creates new project.
 
 .PARAMETER Phases
-Which phases to run: All, Discovery, Planning, Deployment, Governance, Validation.
+Which phases to run: All, Discovery, Planning, Refactoring, Deployment, Governance, Validation.
 Defaults to All.
 
 .PARAMETER DryRun
@@ -33,16 +33,63 @@ If true, validates but doesn't deploy (safe for testing).
 
 #>
 
+#Requires -Version 7.4
+[CmdletBinding()]
 param(
     [string]$SubscriptionId = $null,
-    [string]$FoundryProjectEndpoint = $null,
+    [string]$FoundryProjectEndpoint = $env:AZURE_AI_PROJECT_ENDPOINT,
+    [ValidateNotNullOrEmpty()]
+    [ValidateSet("All", "Discovery", "Planning", "Refactoring", "Deployment", "Governance", "Validation")]
     [string[]]$Phases = @("Discovery", "Planning", "Refactoring", "Deployment", "Governance", "Validation"),
     [switch]$DryRun = $false,
-    [string]$OutputDir = "./migration-workspace",
-    [switch]$Verbose = $false
+    [string]$OutputDir = ".\migration-workspace",
+    [string]$AgentConfigDir,
+    [string]$ProjectName = "migrated-agents",
+    [string]$Location = "eastus",
+    [string]$ResourceGroup = $env:AZURE_RESOURCE_GROUP,
+    [string]$AccountName = $env:AZURE_AI_ACCOUNT_NAME,
+    [string]$GovernanceConfigFile = (Join-Path $PSScriptRoot "..\governance\default-governance.json")
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "helpers\migration-common.ps1")
+if ($Phases -contains "All") {
+    $Phases = @("Discovery", "Planning", "Refactoring", "Deployment", "Governance", "Validation")
+}
+$OutputDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDir)
+$phaseScripts = @{
+    Discovery = "discover-resources.ps1"
+    Planning = "generate-migration-plan.ps1"
+    Refactoring = "refactor-agents.ps1"
+    Deployment = "deploy-agents.ps1"
+    Governance = "apply-governance.ps1"
+    Validation = "validate-migration.ps1"
+}
+foreach ($phase in $Phases) {
+    $scriptPath = Join-Path $PSScriptRoot $phaseScripts[$phase]
+    if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+        throw "Missing script for ${phase}: $scriptPath"
+    }
+}
+if (-not $DryRun -and $Phases -contains "Governance") {
+    $null = Get-MigrationGovernanceDeployment $GovernanceConfigFile $FoundryProjectEndpoint
+}
+if (-not $DryRun -and $Phases -contains "Deployment" -and -not $FoundryProjectEndpoint) {
+    if (-not $ResourceGroup -or -not $AccountName) {
+        throw "Deployment without a project endpoint requires -ResourceGroup and -AccountName (or their Azure environment variables)."
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot "create-foundry-project.ps1") -PathType Leaf)) {
+        throw "Missing project creation script: create-foundry-project.ps1"
+    }
+}
+$needsAzure = ($Phases -contains "Discovery") -or
+    (-not $DryRun -and (($Phases -contains "Deployment") -or ($Phases -contains "Governance") -or
+    (($Phases -contains "Validation") -and $FoundryProjectEndpoint)))
+& (Join-Path $PSScriptRoot "check-and-setup-dependencies.ps1") `
+    -RequireAzure:$needsAzure -RequirePython:($Phases -contains "Refactoring")
+if ($needsAzure -and $SubscriptionId) {
+    $null = Invoke-MigrationAz @("account", "set", "--subscription", $SubscriptionId)
+}
 
 function Log {
     param([string]$Message, [string]$Level = "INFO")
@@ -85,10 +132,10 @@ if (-not (Test-Path $OutputDir)) {
 if ($Phases -contains "Discovery") {
     Invoke-Phase "Discovery" {
         Log "Discovering Azure AI resources..." -Level "INFO"
-        & ".\scripts\discover-resources.ps1" `
+        & (Join-Path $PSScriptRoot "discover-resources.ps1") `
             -SubscriptionId $SubscriptionId `
-            -OutputDir "$OutputDir/audit" `
-            -Verbose:$Verbose
+            -OutputDir "$OutputDir\audit" `
+            -Verbose:($VerbosePreference -eq "Continue")
     }
 }
 
@@ -96,14 +143,14 @@ if ($Phases -contains "Discovery") {
 if ($Phases -contains "Planning") {
     Invoke-Phase "Planning" {
         Log "Generating migration plan..." -Level "INFO"
-        $auditFile = Get-ChildItem "$OutputDir/audit" -Filter "resources_*.json" | Sort-Object -Property LastWriteTime -Descending | Select-Object -First 1
+        $auditFile = Get-ChildItem "$OutputDir\audit" -Filter "resources_*.json" | Sort-Object -Property LastWriteTime -Descending | Select-Object -First 1
         if ($auditFile) {
-            & ".\scripts\generate-migration-plan.ps1" `
+            & (Join-Path $PSScriptRoot "generate-migration-plan.ps1") `
                 -AuditFile $auditFile.FullName `
-                -OutputDir "$OutputDir/migration-plan" `
-                -Verbose:$Verbose
+                -OutputDir "$OutputDir\migration-plan" `
+                -Verbose:($VerbosePreference -eq "Continue")
         } else {
-            Log "⚠ No audit file found - skipping migration plan generation" -Level "WARN"
+            throw "No audit file found in $OutputDir\audit. Run Discovery first."
         }
     }
 }
@@ -112,11 +159,11 @@ if ($Phases -contains "Planning") {
 if ($Phases -contains "Refactoring") {
     Invoke-Phase "Refactoring" {
         Log "Refactoring agents..." -Level "INFO"
-        & ".\scripts\refactor-agents.ps1" `
-            -MigrationPlanDir "$OutputDir/migration-plan" `
-            -OutputDir "$OutputDir/refactored-agents" `
-            -ValidateOnly $DryRun `
-            -Verbose:$Verbose
+        & (Join-Path $PSScriptRoot "refactor-agents.ps1") `
+            -MigrationPlanDir "$OutputDir\migration-plan" `
+            -OutputDir "$OutputDir\refactored-agents" `
+            -AgentConfigDir $AgentConfigDir `
+            -Verbose:($VerbosePreference -eq "Continue")
     }
 }
 
@@ -125,23 +172,20 @@ if ($Phases -contains "Deployment" -and -not $DryRun) {
     Invoke-Phase "Deployment" {
         if (-not $FoundryProjectEndpoint) {
             Log "Creating new Foundry project..." -Level "INFO"
-            & ".\scripts\create-foundry-project.ps1" `
-                -ProjectName "energy-transfer-ai-$(Get-Random -Minimum 1000 -Maximum 9999)" `
-                -Location "eastus" `
-                -EnableHostedAgents $true `
-                -Verbose:$Verbose
-            
-            # After creation, user needs to set endpoint
-            Log "⚠ Please set AZURE_AI_PROJECT_ENDPOINT environment variable and re-run" -Level "WARN"
-            return
+            $project = & (Join-Path $PSScriptRoot "create-foundry-project.ps1") `
+                -ProjectName $ProjectName -Location $Location `
+                -ResourceGroup $ResourceGroup -AccountName $AccountName `
+                -SubscriptionId $SubscriptionId `
+                -Verbose:($VerbosePreference -eq "Continue")
+            $script:FoundryProjectEndpoint = $project.Endpoint
         }
         
         Log "Deploying agents to Foundry..." -Level "INFO"
-        & ".\scripts\deploy-agents.ps1" `
-            -AgentSourceDir "$OutputDir/refactored-agents" `
+        & (Join-Path $PSScriptRoot "deploy-agents.ps1") `
+            -AgentSourceDir "$OutputDir\refactored-agents" `
             -FoundryProjectEndpoint $FoundryProjectEndpoint `
             -SmokeTest $true `
-            -Verbose:$Verbose
+            -Verbose:($VerbosePreference -eq "Continue")
     }
 }
 
@@ -149,15 +193,15 @@ if ($Phases -contains "Deployment" -and -not $DryRun) {
 if ($Phases -contains "Governance" -and -not $DryRun) {
     Invoke-Phase "Governance" {
         if (-not $FoundryProjectEndpoint) {
-            Log "⚠ Cannot apply governance without Foundry endpoint - skipping" -Level "WARN"
-            return
+            throw "Governance requires -FoundryProjectEndpoint or AZURE_AI_PROJECT_ENDPOINT."
         }
         
         Log "Applying governance policies..." -Level "INFO"
-        & ".\scripts\apply-governance.ps1" `
+        & (Join-Path $PSScriptRoot "apply-governance.ps1") `
             -FoundryProjectEndpoint $FoundryProjectEndpoint `
-            -GovernanceConfigFile ".\governance\default-governance.json" `
-            -Verbose:$Verbose
+            -GovernanceConfigFile $GovernanceConfigFile `
+            -OutputDir "$OutputDir\reports" `
+            -Verbose:($VerbosePreference -eq "Continue")
     }
 }
 
@@ -166,17 +210,17 @@ if ($Phases -contains "Validation") {
     Invoke-Phase "Validation" {
         if ($DryRun -or -not $FoundryProjectEndpoint) {
             Log "Performing offline validation..." -Level "INFO"
-            & ".\scripts\validate-migration.ps1" `
-                -AgentSourceDir "$OutputDir/refactored-agents" `
-                -OutputDir "$OutputDir/reports" `
-                -Verbose:$Verbose
+            & (Join-Path $PSScriptRoot "validate-migration.ps1") `
+                -AgentSourceDir "$OutputDir\refactored-agents" `
+                -OutputDir "$OutputDir\reports" `
+                -Verbose:($VerbosePreference -eq "Continue")
         } else {
             Log "Performing full end-to-end validation..." -Level "INFO"
-            & ".\scripts\validate-migration.ps1" `
+            & (Join-Path $PSScriptRoot "validate-migration.ps1") `
                 -FoundryProjectEndpoint $FoundryProjectEndpoint `
-                -AgentSourceDir "$OutputDir/refactored-agents" `
-                -OutputDir "$OutputDir/reports" `
-                -Verbose:$Verbose
+                -AgentSourceDir "$OutputDir\refactored-agents" `
+                -OutputDir "$OutputDir\reports" `
+                -Verbose:($VerbosePreference -eq "Continue")
         }
     }
 }
@@ -184,26 +228,28 @@ if ($Phases -contains "Validation") {
 # Summary
 Write-Host ""
 Log "╔════════════════════════════════════════════════════════════════╗" -Level "SUCCESS"
-Log "║ MIGRATION COMPLETE                                              ║" -Level "SUCCESS"
+Log "║ REQUESTED PHASES COMPLETE                                       ║" -Level "SUCCESS"
 Log "╚════════════════════════════════════════════════════════════════╝" -Level "SUCCESS"
 Write-Host ""
 
 Log "Output Directory: $OutputDir" -Level "INFO"
-Log "Audit Reports: $OutputDir/audit" -Level "INFO"
-Log "Migration Plan: $OutputDir/migration-plan" -Level "INFO"
-Log "Refactored Agents: $OutputDir/refactored-agents" -Level "INFO"
-Log "Validation Reports: $OutputDir/reports" -Level "INFO"
+Log "Audit Reports: $OutputDir\audit" -Level "INFO"
+Log "Migration Plan: $OutputDir\migration-plan" -Level "INFO"
+Log "Refactored Agents: $OutputDir\refactored-agents" -Level "INFO"
+Log "Validation Reports: $OutputDir\reports" -Level "INFO"
 
 Log "Next Steps:" -Level "INFO"
-Log "1. Review audit reports in $OutputDir/audit" -Level "INFO"
-Log "2. Review migration strategy in $OutputDir/migration-plan" -Level "INFO"
+Log "1. Review audit reports in $OutputDir\audit" -Level "INFO"
+Log "2. Review migration strategy in $OutputDir\migration-plan" -Level "INFO"
 Log "3. Test refactored agents locally before deployment" -Level "INFO"
 if (-not $DryRun -and $FoundryProjectEndpoint) {
     Log "4. Monitor deployed agents in Foundry console" -Level "INFO"
-    Log "5. Review validation report in $OutputDir/reports" -Level "INFO"
+    Log "5. Review validation report in $OutputDir\reports" -Level "INFO"
 } else {
     Log "4. To deploy: Set AZURE_AI_PROJECT_ENDPOINT and run migrate.ps1 with -Phases Deployment" -Level "INFO"
 }
 
 Write-Host ""
-Log "Migration framework complete!" -Level "SUCCESS"
+if ($DryRun) {
+    Log "Dry run complete. Deployment and governance were not executed." -Level "INFO"
+}

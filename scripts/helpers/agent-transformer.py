@@ -5,7 +5,6 @@ Handles prompt refactoring, tool migration, and configuration mapping.
 """
 
 import json
-import yaml
 import sys
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -63,31 +62,24 @@ class AgentTransformer:
     
     def _transform_model_config(self):
         """Transform model configuration from OpenAI to Foundry."""
-        model_map = {
-            'gpt-4o': {'deployment': 'gpt-4o-deployment', 'version': 'gpt-4o-2024-05-13'},
-            'gpt-4-turbo': {'deployment': 'gpt-4-turbo-deployment', 'version': 'gpt-4-turbo-2024-04-09'},
-            'gpt-4': {'deployment': 'gpt-4-deployment', 'version': 'gpt-4-0613'},
-            'gpt-35-turbo': {'deployment': 'gpt-35-turbo-deployment', 'version': 'gpt-35-turbo-1106'},
-        }
-        
-        source_model = self.source.get('model', 'gpt-4o')
-        mapped = model_map.get(source_model, model_map['gpt-4o'])
+        source_model = self.source['model']
         
         self.target['modelConfiguration'] = {
-            'modelDeployment': mapped['deployment'],
-            'modelVersion': mapped['version'],
-            'fallbackModels': [
-                {'deployment': 'gpt-4-turbo-deployment', 'version': 'gpt-4-turbo-2024-04-09', 'fallbackOrder': 1},
-                {'deployment': 'gpt-35-turbo-deployment', 'version': 'gpt-35-turbo-1106', 'fallbackOrder': 2}
-            ],
-            'temperature': self.source.get('temperature', 0.7),
-            'maxTokens': self.source.get('max_tokens', 2048),
-            'topP': self.source.get('top_p', 0.9)
+            'modelDeployment': self.source.get('model_deployment', source_model),
+            'modelVersion': self.source.get('model_version', 'unspecified'),
+            'fallbackModels': []
         }
+        for source_key, target_key in (
+            ('temperature', 'temperature'),
+            ('max_tokens', 'maxTokens'),
+            ('top_p', 'topP'),
+        ):
+            if source_key in self.source:
+                self.target['modelConfiguration'][target_key] = self.source[source_key]
     
     def _transform_system_prompt(self):
         """Transform and enhance system prompt with governance directives."""
-        base_prompt = self.source.get('system_prompt', '')
+        base_prompt = self.source.get('system_prompt') or self.source.get('instructions', '')
         
         self.target['systemPrompt'] = {
             'template': base_prompt,
@@ -96,21 +88,9 @@ class AgentTransformer:
     
     def _transform_tools(self):
         """Transform function calls and tools to Foundry format."""
-        tools = []
-        
-        source_tools = self.source.get('tools', [])
-        for tool in source_tools:
-            if isinstance(tool, dict):
-                tools.append({
-                    'name': tool.get('name'),
-                    'type': 'function',
-                    'enabled': True,
-                    'governance': {
-                        'requiresApproval': tool.get('requires_approval', False),
-                        'restrictedTenants': tool.get('restricted_tenants', [])
-                    }
-                })
-        
+        tools = self.source.get('tools', [])
+        if not isinstance(tools, list) or any(not isinstance(tool, dict) for tool in tools):
+            raise ValueError("tools must be a list of tool definitions")
         self.target['tools'] = tools
     
     def _add_governance_directives(self):
@@ -179,10 +159,12 @@ def transform_agent_config(
         # Load source configuration
         input_path = Path(input_file)
         if input_path.suffix.lower() == '.json':
-            with open(input_path, 'r') as f:
+            with open(input_path, 'r', encoding='utf-8-sig') as f:
                 source_config = json.load(f)
         elif input_path.suffix.lower() in ['.yaml', '.yml']:
-            with open(input_path, 'r') as f:
+            import yaml
+
+            with open(input_path, 'r', encoding='utf-8-sig') as f:
                 source_config = yaml.safe_load(f)
         else:
             logger.error(f"Unsupported file format: {input_path.suffix}")
@@ -200,10 +182,12 @@ def transform_agent_config(
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(output_path, 'w') as f:
+        with open(output_path, 'w', encoding='utf-8') as f:
             if output_path.suffix.lower() == '.json':
                 json.dump(target_config, f, indent=2)
             else:
+                import yaml
+
                 yaml.dump(target_config, f, default_flow_style=False)
         
         logger.info(f"Saved transformed config: {output_path}")

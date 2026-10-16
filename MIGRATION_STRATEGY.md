@@ -196,7 +196,7 @@ Target Foundry Account
 ./scripts/create-foundry-project.ps1 `
   -ProjectName "energy-transfer-prod" `
   -Location "eastus" `
-  -EnableHostedAgents $true
+  -ResourceGroup "YOUR_RESOURCE_GROUP" -AccountName "YOUR_ACCOUNT_NAME"
 
 # Apply governance
 ./scripts/apply-governance.ps1 `

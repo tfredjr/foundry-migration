@@ -2,6 +2,13 @@
 
 This guide enables non-technical stakeholders to execute the entire migration with minimal manual intervention.
 
+> **Current implementation:** Use PowerShell 7.4+ and exported JSON prompt-agent
+> configurations. Read [Implemented Script Workflow](README.md#implemented-script-workflow)
+> for the input format, supported scope, governance template contract, and offline
+> test command. Resource inventory is not agent source code. Hosted-agent code
+> migration, automatic model provisioning, and compliance certification are not
+> implemented. The default governance JSON cannot be applied directly.
+
 ## Prerequisites (5 minutes)
 
 1. **Azure Credentials**
@@ -23,12 +30,13 @@ This guide enables non-technical stakeholders to execute the entire migration wi
 
 ## One-Command Migration
 
-Run the complete migration with one command:
+Start with a dry run (Discovery reads Azure; other executed phases are local):
 
 ```powershell
 ./scripts/migrate.ps1 `
   -SubscriptionId "YOUR_SUBSCRIPTION_ID" `
-  -Phases @("Discovery", "Planning", "Refactoring", "Deployment", "Governance", "Validation") `
+  -Phases All -DryRun `
+  -AgentConfigDir ".\exported-agents" `
   -Verbose
 ```
 
@@ -36,10 +44,12 @@ This script will:
 1. ✓ Discover all OpenAI and Foundry resources
 2. ✓ Generate detailed migration plan
 3. ✓ Refactor all agents (offline, non-destructive)
-4. ✓ Create Foundry project if needed
-5. ✓ Deploy refactored agents
-6. ✓ Apply governance policies
-7. ✓ Validate end-to-end migration
+4. Validate generated configurations offline
+
+Deployment and Governance are skipped by `-DryRun`. After review, run
+`-Phases Deployment,Validation` with `-FoundryProjectEndpoint` and the same
+`-OutputDir`. Run Governance separately with a reviewed `-GovernanceConfigFile`
+as described in README.md. Online validation performs billable smoke invocations.
 
 **Expected Duration:** 2-3 hours total
 
@@ -89,7 +99,8 @@ notepad ./migration-plan/MIGRATION_STRATEGY.md
 ./scripts/create-foundry-project.ps1 `
   -ProjectName "energy-transfer-prod" `
   -Location "eastus" `
-  -EnableHostedAgents $true `
+  -ResourceGroup "YOUR_RESOURCE_GROUP" `
+  -AccountName "YOUR_ACCOUNT_NAME" `
   -Verbose
 
 # After creation, extract the project endpoint and set environment variables
@@ -113,22 +124,20 @@ $env:AZURE_AI_ACCOUNT_NAME = "YOUR_ACCOUNT_NAME"
 # Transform all agents (offline, non-destructive)
 ./scripts/refactor-agents.ps1 `
   -MigrationPlanDir "./migration-plan" `
+  -AgentConfigDir ".\exported-agents" `
   -OutputDir "./refactored-agents" `
   -ValidateOnly $false `
   -Verbose
 
 # Review generated agents
-Get-ChildItem ./refactored-agents -Recurse -Filter "*.py" | Select-Object FullName
+Get-ChildItem .\refactored-agents -Recurse -Filter "agent-config.json" | Select-Object FullName
 ```
 
 **Expected Output:**
 ```
 refactored-agents/
 ├── agent-1/
-│   ├── main.py                  (refactored agent code)
-│   ├── agent-config.yaml        (Foundry configuration)
-│   ├── requirements.txt          (dependencies)
-│   └── README.md               (documentation)
+│   └── agent-config.json        (reviewable prompt-agent configuration)
 ├── agent-2/
 │   └── ...
 ```
@@ -164,14 +173,11 @@ refactored-agents/
 # Configure guardrails, RBAC, and audit logging
 ./scripts/apply-governance.ps1 `
   -FoundryProjectEndpoint $env:AZURE_AI_PROJECT_ENDPOINT `
-  -GovernanceConfigFile "./governance/default-governance.json" `
+  -GovernanceConfigFile ".\governance\your-reviewed-governance.json" `
   -Verbose
 
-# This will:
-# - Enable content filters
-# - Set up RBAC roles
-# - Enable audit logging
-# - Configure guardrails
+# Applies only the resources declared by your reviewed ARM/Bicep template.
+# An abstract baseline alone is rejected; enforcement must be implemented in the template.
 ```
 
 ### Step 7: Validate Migration (30 minutes)
@@ -188,11 +194,10 @@ refactored-agents/
 notepad ./reports/validation-report-*.md
 ```
 
-**Expected Output:**
-- ✓ All agents deployed successfully
-- ✓ Governance policies applied
-- ✓ Audit logging active
-- ✓ Performance baseline established
+**Expected Output:** `validation-report.md` and `validation-report.json`.
+Offline validation checks configurations. Online validation also verifies recorded
+agent versions and invokes each agent. Neither mode certifies governance,
+audit logging, compliance, or performance.
 
 ## What If Something Fails?
 
@@ -225,7 +230,7 @@ az role assignment list --assignee "$(az ad signed-in-user show --query id -o ts
 # Verify endpoint format
 Write-Host $env:AZURE_AI_PROJECT_ENDPOINT
 
-# Should be: https://<region>.api.cognitive.microsoft.com/
+# Should be: https://<account>.services.ai.azure.com/api/projects/<project>
 
 # Test connectivity
 curl -I $env:AZURE_AI_PROJECT_ENDPOINT

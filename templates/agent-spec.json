@@ -3,12 +3,13 @@
   "title": "Foundry Agent Configuration",
   "description": "Configuration schema for migrated Foundry agents with governance",
   "type": "object",
-  "required": ["name", "modelDeployment", "modelVersion"],
+  "required": ["metadata", "modelConfiguration", "systemPrompt", "tools"],
   "properties": {
     "metadata": {
       "type": "object",
+      "required": ["name"],
       "properties": {
-        "name": { "type": "string", "description": "Agent display name" },
+        "name": { "type": "string", "minLength": 1, "description": "Agent display name" },
         "description": { "type": "string", "description": "Agent purpose and capabilities" },
         "owner": { "type": "string", "description": "Agent owner/team" },
         "createdFrom": { "type": "string", "description": "Source resource (e.g., 'openai-studio-agent-1')" },
@@ -27,6 +28,7 @@
       "properties": {
         "modelDeployment": {
           "type": "string",
+          "minLength": 1,
           "description": "Foundry model deployment name",
           "examples": ["gpt-4o-deployment", "latest-gpt4-deployment"]
         },
@@ -54,8 +56,9 @@
     },
     "systemPrompt": {
       "type": "object",
+      "required": ["template"],
       "properties": {
-        "template": { "type": "string", "description": "System prompt template" },
+        "template": { "type": "string", "minLength": 1, "description": "System prompt template" },
         "governanceInstructions": {
           "type": "string",
           "description": "Governance policies as system prompt suffix"
